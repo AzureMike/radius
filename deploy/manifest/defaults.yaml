@@ -1,17 +1,29 @@
 # defaults.yaml lists the resource types from resource-types-contrib that ship
 # as defaults in Radius. Each entry uses the <namespace>/<typeName> format
-# and is resolved to a file path in the resource-types-contrib module
+# and is resolved to a file path in the resource-types-contrib repository
 # using the convention: strip the "Radius." prefix, then
 # <namespace>/<typeName>/<typeName>.yaml.
 #
-# The version of resource-types-contrib is pinned in go.mod. To update:
+# The upstream version is pinned by commit SHA in the source block below and
+# fetched directly with git (no Go module). To update:
 #   make update-resource-types
 #
 # To add a new default resource type:
 #   1. Merge the manifest in resource-types-contrib.
 #   2. Add the entry below.
 #   3. Run: make update-resource-types
-#   4. Commit the updated files (defaults.yaml, go.mod, go.sum, and copied YAMLs).
+#   4. Commit the updated files (defaults.yaml and the copied YAMLs).
+
+# source pins the upstream resource-types-contrib revision the default
+# manifests are copied from. sync-resource-types performs a shallow git fetch
+# of source.ref; update-resource-types resolves a branch/tag/commit to an
+# immutable commit SHA and rewrites source.ref here.
+source:
+  repo: github.com/radius-project/resource-types-contrib
+  # An immutable commit SHA (Phase A). A branch or tag is also accepted by the
+  # fetch, but update-resource-types always pins a full commit SHA.
+  ref: 51ee446a8fc6be59f63929ca36d471cbc7d07f60
+
 defaultRegistration:
   - Radius.Compute/containers
   - Radius.Compute/persistentVolumes

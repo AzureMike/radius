@@ -19,25 +19,33 @@
 name: contrib-update-resource-types
 
 # Triggered via `repository_dispatch` from radius-project/resource-types-contrib
-# whenever its `main` branch updates. Opens (or refreshes) a PR that runs
-# `make update-resource-types` so the manifest copies committed under
-# deploy/manifest/built-in-providers/ stay in sync with the contrib repo.
+# on two channels:
+#   - resource-types-contrib-updated:  every push to its `main` branch (the
+#     moving latest/edge channel; client_payload.contrib_ref is a commit SHA).
+#   - resource-types-contrib-released: a published release (the release channel;
+#     client_payload.contrib_ref is the release tag).
+# Either opens (or refreshes) a PR that runs `make update-resource-types`, which
+# resolves the ref to an immutable commit SHA, pins it in
+# deploy/manifest/defaults.yaml (source.ref), and re-copies the manifests under
+# deploy/manifest/built-in-providers/ so they stay in sync with the contrib repo.
 #
 # Merging the resulting PR triggers the existing `build-and-push-bicep-types`
 # job in build.yaml, which dispatches to azure-octo/radius-publisher to
 # republish `radius:latest` with the refreshed contrib types.
 #
-# See the design note:
+# See the design notes:
 #   eng/design-notes/extensibility/2026-05-unified-bicep-extension-publishing.md
+#   eng/design-notes/extensibility/2026-06-resource-types-sync-without-fake-go-module.md
 
 on:
   repository_dispatch:
     types:
       - resource-types-contrib-updated
+      - resource-types-contrib-released
   # workflow_dispatch: # Enable during development for manual testing
   #   inputs:
   #     contrib_ref:
-  #       description: "Optional resource-types-contrib commit SHA the update is based on."
+  #       description: "Optional resource-types-contrib ref (commit SHA, tag, or branch) the update is based on."
   #       required: false
   #       default: ""
 
@@ -62,11 +70,12 @@ jobs:
       contents: read # actions/checkout
     steps:
       - name: Resolve contrib ref
-        # Extracts the contrib commit SHA from either the dispatch payload or
-        # workflow_dispatch input. Validates it as a hex SHA to prevent injection.
-        # Falls back to "main" if not provided. Note: this value is informational
-        # only (used in commit messages and PR body). The actual version fetched
-        # is determined by 'make update-resource-types' which runs 'go get ...@latest'.
+        # Extracts the contrib ref from the dispatch payload or workflow_dispatch
+        # input: a commit SHA (updated channel) or a release tag (released
+        # channel). Falls back to "main". Validated against a conservative
+        # allowlist (SHA, tag, or branch names) to prevent shell injection. The
+        # ref is passed to 'make update-resource-types', which resolves it to an
+        # immutable commit SHA and pins it in defaults.yaml (source.ref).
         id: contrib
         env:
           DISPATCH_REF: ${{ github.event.client_payload.contrib_ref }}
@@ -76,8 +85,8 @@ jobs:
           ref="${DISPATCH_REF:-${INPUT_REF:-}}"
           if [ -z "${ref}" ]; then
             ref="main"
-          elif ! [[ "${ref}" =~ ^[a-f0-9]{7,40}$ ]]; then
-            echo "ERROR: contrib_ref must be a hex commit SHA, got '${ref}'"
+          elif ! printf '%s' "${ref}" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$'; then
+            echo "ERROR: contrib_ref must be a commit SHA, tag, or branch name, got '${ref}'"
             exit 1
           fi
           echo "ref=${ref}" >> "${GITHUB_OUTPUT}"
@@ -111,22 +120,17 @@ jobs:
           git config user.name "Radius CI Bot"
           git config user.email "radiuscoreteam@service.microsoft.com"
 
-      - name: Setup Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-          cache: true
-
       - name: Install yq
         # Required by make update-resource-types / sync-resource-types to parse
         # deploy/manifest/defaults.yaml.
         run: make install-yq
 
       - name: Run make update-resource-types
-        # Bumps go.mod to the latest resource-types-contrib version and copies
-        # the manifest files listed in defaults.yaml into
-        # deploy/manifest/built-in-providers/{dev,self-hosted}/.
+        # Resolves the contrib ref to an immutable commit SHA, pins it in
+        # deploy/manifest/defaults.yaml (source.ref), and copies the manifest
+        # files listed there into deploy/manifest/built-in-providers/{dev,self-hosted}/.
+        env:
+          RESOURCE_TYPES_REF: ${{ steps.contrib.outputs.ref }}
         run: |
           set -euo pipefail
           if ! make -n update-resource-types >/dev/null 2>&1; then

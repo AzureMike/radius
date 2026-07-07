@@ -42,8 +42,8 @@ fail() {
 }
 
 require_tools() {
-    command -v yq >/dev/null 2>&1 || fail "yq is required but not found. Install via: make install-yq"
-    command -v git >/dev/null 2>&1 || fail "git is required but not found."
+    command -v yq > /dev/null 2>&1 || fail "yq is required but not found. Install via: make install-yq"
+    command -v git > /dev/null 2>&1 || fail "git is required but not found."
 }
 
 # namespace_of <namespace>/<typeName> -> <namespace>
@@ -129,13 +129,13 @@ copy_manifests() {
     trap "rm -rf '${tmp_root}'" EXIT
 
     pairs_file="${tmp_root}/pairs"
-    : >"${pairs_file}"
+    : > "${pairs_file}"
     for ns in $(used_namespaces); do
         repo="$(source_field "${ns}" repo)"
         ref="$(source_field "${ns}" ref)"
         { [ -n "${repo}" ] && [ "${repo}" != "null" ]; } || fail "source.repo is not set for namespace '${ns}' in ${DEFAULTS_YAML}."
         { [ -n "${ref}" ] && [ "${ref}" != "null" ]; } || fail "source.ref is not set for namespace '${ns}' in ${DEFAULTS_YAML}."
-        printf '%s|%s\n' "${repo}" "${ref}" >>"${pairs_file}"
+        printf '%s|%s\n' "${repo}" "${ref}" >> "${pairs_file}"
     done
     sort -u "${pairs_file}" -o "${pairs_file}"
 
@@ -152,13 +152,12 @@ copy_manifests() {
             type="${rel##*/}"
             src="${dir}/${rel}/${type}.yaml"
             [ -f "${src}" ] || fail "File not found: ${rel}/${type}.yaml (from entry '${entry}'). Verify the entry and the pinned ref."
-            # shellcheck disable=SC2086
             for dest in ${MANIFEST_DEST_DIRS}; do
                 cp "${src}" "${dest}/${type}.yaml"
             done
             echo "  Copied ${entry}"
         done
-    done <"${pairs_file}"
+    done < "${pairs_file}"
 }
 
 # prune_stale removes managed manifests that are no longer in defaultRegistration
@@ -170,20 +169,24 @@ prune_stale() {
         type="${rel##*/}"
         expected="${expected} ${type}.yaml"
     done
-    # shellcheck disable=SC2086
     for dest in ${MANIFEST_DEST_DIRS}; do
         for file in "${dest}"/*.yaml; do
             [ -e "${file}" ] || continue
             base="$(basename "${file}")"
             is_manual=false
-            # shellcheck disable=SC2086
             for mc in ${MANUAL_CORE_MANIFESTS}; do
-                if [ "${base}" = "${mc}" ]; then is_manual=true; break; fi
+                if [ "${base}" = "${mc}" ]; then
+                    is_manual=true
+                    break
+                fi
             done
             [ "${is_manual}" = true ] && continue
             is_expected=false
             for ef in ${expected}; do
-                if [ "${base}" = "${ef}" ]; then is_expected=true; break; fi
+                if [ "${base}" = "${ef}" ]; then
+                    is_expected=true
+                    break
+                fi
             done
             if [ "${is_expected}" = false ]; then
                 echo "  Removing stale manifest: ${file}"

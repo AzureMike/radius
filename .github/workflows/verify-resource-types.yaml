@@ -15,20 +15,20 @@
 # ------------------------------------------------------------
 
 # This workflow verifies that the resource type manifest files committed in
-# deploy/manifest/built-in-providers/ match the upstream revision pinned in
-# deploy/manifest/defaults.yaml (source.ref).
+# deploy/manifest/built-in-providers/ match the per-namespace upstream
+# revisions pinned in deploy/manifest/defaults.yaml (sources[].ref).
 #
-# It runs "make sync-resource-types", which re-fetches the pinned ref from
+# It runs "make sync-resource-types", which re-fetches each pinned ref from
 # resource-types-contrib and re-copies the manifest files, and then checks for
 # any diff.
 #
 # - If there is no diff, the committed copies are in sync and the check passes.
 # - If there is a diff, the committed copies have drifted from the pinned
-#   ref and the check fails. The developer must run
+#   refs and the check fails. The developer must run
 #   "make sync-resource-types" locally and commit the updated files.
 #
 # This catches:
-#   - A source.ref bump in defaults.yaml without re-running "make sync-resource-types"
+#   - A sources[].ref bump in defaults.yaml without re-running "make sync-resource-types"
 #   - Manual edits to copied manifest files that drift from upstream
 #   - New entries in defaults.yaml without re-syncing
 #
@@ -43,12 +43,14 @@ on:
       - main
       - release/*
     paths:
-      # Trigger when the default list and upstream pin, the copied manifests,
-      # or the sync logic (Makefile, resource-types.mk) changes.
+      # Trigger when the default list and per-namespace pins, the copied
+      # manifests, or the sync logic (Makefile, resource-types.mk, the sync
+      # script) changes.
       - "deploy/manifest/defaults.yaml"
       - "deploy/manifest/built-in-providers/**"
       - "Makefile"
       - "build/resource-types.mk"
+      - "build/scripts/sync-resource-types.sh"
   # The merge_group event does not support path filters. This check is cheap
   # (sync + git diff), so it simply runs on every queued group rather than
   # adding change-detection. Scoped to main only so the release branch flow is
@@ -89,7 +91,7 @@ jobs:
           if ! git diff --exit-code deploy/manifest/built-in-providers/; then
             echo ""
             echo "ERROR: Resource type manifest copies are out of sync with the pinned"
-            echo "resource-types-contrib revision (source.ref) in deploy/manifest/defaults.yaml."
+            echo "resource-types-contrib revisions (sources[].ref) in deploy/manifest/defaults.yaml."
             echo ""
             echo "Run 'make sync-resource-types' and commit the updated files."
             exit 1

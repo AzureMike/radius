@@ -25,9 +25,11 @@ name: contrib-update-resource-types
 #   - resource-types-contrib-released: a published release (the release channel;
 #     client_payload.contrib_ref is the release tag).
 # Either opens (or refreshes) a PR that runs `make update-resource-types`, which
-# resolves the ref to an immutable commit SHA, pins it in
-# deploy/manifest/defaults.yaml (source.ref), and re-copies the manifests under
-# deploy/manifest/built-in-providers/ so they stay in sync with the contrib repo.
+# resolves the ref to an immutable commit SHA, pins it per namespace in
+# deploy/manifest/defaults.yaml (sources[].ref), and re-copies the manifests
+# under deploy/manifest/built-in-providers/ so they stay in sync with the
+# contrib repo. An optional client_payload.contrib_namespace scopes the update
+# to a single namespace (empty updates all).
 #
 # Merging the resulting PR triggers the existing `build-and-push-bicep-types`
 # job in build.yaml, which dispatches to azure-octo/radius-publisher to
@@ -46,6 +48,10 @@ on:
   #   inputs:
   #     contrib_ref:
   #       description: "Optional resource-types-contrib ref (commit SHA, tag, or branch) the update is based on."
+  #       required: false
+  #       default: ""
+  #     contrib_namespace:
+  #       description: "Optional resource-type namespace to scope the update to (e.g. Radius.Compute). Empty updates all."
   #       required: false
   #       default: ""
 
@@ -70,16 +76,21 @@ jobs:
       contents: read # actions/checkout
     steps:
       - name: Resolve contrib ref
-        # Extracts the contrib ref from the dispatch payload or workflow_dispatch
-        # input: a commit SHA (updated channel) or a release tag (released
-        # channel). Falls back to "main". Validated against a conservative
-        # allowlist (SHA, tag, or branch names) to prevent shell injection. The
-        # ref is passed to 'make update-resource-types', which resolves it to an
-        # immutable commit SHA and pins it in defaults.yaml (source.ref).
+        # Extracts the contrib ref and optional namespace from the dispatch
+        # payload or workflow_dispatch input. The ref is a commit SHA (updated
+        # channel) or a release tag (released channel) and falls back to "main".
+        # The namespace, when present, scopes the sync to one resource-type
+        # namespace (e.g. Radius.Compute); empty updates every namespace. Both
+        # are validated against a conservative allowlist to prevent shell
+        # injection, then passed to 'make update-resource-types', which resolves
+        # the ref to an immutable commit SHA and pins it in defaults.yaml
+        # (sources[].ref).
         id: contrib
         env:
           DISPATCH_REF: ${{ github.event.client_payload.contrib_ref }}
+          DISPATCH_NS: ${{ github.event.client_payload.contrib_namespace }}
           INPUT_REF: ${{ github.event.inputs.contrib_ref }}
+          INPUT_NS: ${{ github.event.inputs.contrib_namespace }}
         run: |
           set -euo pipefail
           ref="${DISPATCH_REF:-${INPUT_REF:-}}"
@@ -89,8 +100,14 @@ jobs:
             echo "ERROR: contrib_ref must be a commit SHA, tag, or branch name, got '${ref}'"
             exit 1
           fi
+          namespace="${DISPATCH_NS:-${INPUT_NS:-}}"
+          if [ -n "${namespace}" ] && ! printf '%s' "${namespace}" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'; then
+            echo "ERROR: contrib_namespace must be a resource-type namespace like Radius.Compute, got '${namespace}'"
+            exit 1
+          fi
           echo "ref=${ref}" >> "${GITHUB_OUTPUT}"
-          echo "Contrib ref: ${ref}"
+          echo "namespace=${namespace}" >> "${GITHUB_OUTPUT}"
+          echo "Contrib ref: ${ref}${namespace:+ (namespace ${namespace})}"
 
       - name: Generate App Token
         # Uses a GitHub App token instead of the default GITHUB_TOKEN so that
@@ -126,11 +143,13 @@ jobs:
         run: make install-yq
 
       - name: Run make update-resource-types
-        # Resolves the contrib ref to an immutable commit SHA, pins it in
-        # deploy/manifest/defaults.yaml (source.ref), and copies the manifest
-        # files listed there into deploy/manifest/built-in-providers/{dev,self-hosted}/.
+        # Resolves the contrib ref to an immutable commit SHA, pins it per
+        # namespace in deploy/manifest/defaults.yaml (sources[].ref), and copies
+        # the manifest files into deploy/manifest/built-in-providers/{dev,self-hosted}/.
+        # RESOURCE_TYPES_NAMESPACE (empty = all) scopes the update to one namespace.
         env:
           RESOURCE_TYPES_REF: ${{ steps.contrib.outputs.ref }}
+          RESOURCE_TYPES_NAMESPACE: ${{ steps.contrib.outputs.namespace }}
         run: |
           set -euo pipefail
           if ! make -n update-resource-types >/dev/null 2>&1; then

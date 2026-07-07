@@ -60,17 +60,21 @@ MANUAL_CORE_MANIFESTS := applications_core.yaml applications_dapr.yaml applicati
 # immutable commit SHA before pinning it in defaults.yaml. Defaults to "main"
 # (the moving latest/edge channel). RESOURCE_TYPES_NAMESPACE optionally limits
 # the update to a single namespace (e.g. Radius.Compute); empty updates every
-# namespace. Examples:
+# namespace. RESOURCE_TYPES_PINS (a JSON array of {namespace, ref}) takes
+# precedence and pins several namespaces at once - it is how the
+# resource-types-contrib dispatch payload advances only the affected namespaces.
+# Examples:
 #   make update-resource-types
 #   make update-resource-types RESOURCE_TYPES_REF=v0.56.0
 #   make update-resource-types RESOURCE_TYPES_NAMESPACE=Radius.Compute RESOURCE_TYPES_REF=v0.56.0
 RESOURCE_TYPES_REF ?= main
 RESOURCE_TYPES_NAMESPACE ?=
-export RESOURCE_TYPES_REF RESOURCE_TYPES_NAMESPACE
+RESOURCE_TYPES_PINS ?=
+export RESOURCE_TYPES_REF RESOURCE_TYPES_NAMESPACE RESOURCE_TYPES_PINS
 
 # Config consumed by build/scripts/sync-resource-types.sh (which does the fetch,
-# copy, and prune). RESOURCE_TYPES_REF / RESOURCE_TYPES_NAMESPACE reach the
-# script through the environment via the export above.
+# copy, and prune). RESOURCE_TYPES_REF / RESOURCE_TYPES_NAMESPACE / RESOURCE_TYPES_PINS
+# reach the script through the environment via the export above.
 SYNC_RESOURCE_TYPES_ENV := \
 	DEFAULTS_YAML="$(DEFAULTS_YAML)" \
 	MANIFEST_DEST_DIRS="$(MANIFEST_DEST_DIRS)" \

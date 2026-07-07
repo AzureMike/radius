@@ -17,16 +17,23 @@ set -euo pipefail
 #
 # Modes:
 #   (default)   Copy manifests from the refs already pinned in defaults.yaml.
-#   --update    First resolve each source's ref to an immutable commit SHA and
-#               pin it in defaults.yaml, then copy. RESOURCE_TYPES_REF selects
-#               the ref to resolve (default "main"); RESOURCE_TYPES_NAMESPACE
-#               limits the update to a single namespace (default: all).
+#   --update    Re-pin one or more namespaces, then copy. Two ways to select
+#               what to pin (RESOURCE_TYPES_PINS wins when set):
+#                 * RESOURCE_TYPES_PINS  - a JSON array of {namespace, ref}
+#                   (the resource-types-contrib dispatch payload). Each listed,
+#                   *registered* namespace is pinned to its ref; namespaces not
+#                   in defaults.yaml `sources` are skipped.
+#                 * RESOURCE_TYPES_REF / RESOURCE_TYPES_NAMESPACE - resolve one
+#                   ref (default "main") for a single namespace, or all when
+#                   RESOURCE_TYPES_NAMESPACE is empty.
+#               Each ref is resolved to an immutable commit SHA before pinning.
 #
 # Environment (DEFAULTS_YAML, MANIFEST_DEST_DIRS and MANUAL_CORE_MANIFESTS are
 # provided by build/resource-types.mk; defaults keep the script runnable alone):
 #   DEFAULTS_YAML             Path to defaults.yaml.
 #   MANIFEST_DEST_DIRS        Space-separated destination directories.
 #   MANUAL_CORE_MANIFESTS     Space-separated filenames that are never pruned.
+#   RESOURCE_TYPES_PINS       --update: JSON [{namespace, ref}, ...] to pin.
 #   RESOURCE_TYPES_REF        --update: ref to resolve (default "main").
 #   RESOURCE_TYPES_NAMESPACE  --update: limit to one namespace (default: all).
 
@@ -35,6 +42,7 @@ readonly MANIFEST_DEST_DIRS="${MANIFEST_DEST_DIRS:-deploy/manifest/built-in-prov
 readonly MANUAL_CORE_MANIFESTS="${MANUAL_CORE_MANIFESTS:-applications_core.yaml applications_dapr.yaml applications_datastores.yaml applications_messaging.yaml microsoft_resources.yaml radius_core.yaml}"
 readonly RESOURCE_TYPES_REF="${RESOURCE_TYPES_REF:-main}"
 readonly RESOURCE_TYPES_NAMESPACE="${RESOURCE_TYPES_NAMESPACE:-}"
+readonly RESOURCE_TYPES_PINS="${RESOURCE_TYPES_PINS:-}"
 
 fail() {
     echo "ERROR: $*" >&2
@@ -60,6 +68,16 @@ validate_ref() {
     case "$1" in
         "") fail "ref must not be empty." ;;
         *[!A-Za-z0-9._/-]*) fail "ref '$1' contains invalid characters." ;;
+    esac
+}
+
+# validate_namespace rejects values with characters outside a conservative
+# allowlist so they can be interpolated into yq expressions safely (e.g.
+# Radius.Compute).
+validate_namespace() {
+    case "$1" in
+        "") fail "namespace must not be empty." ;;
+        *[!A-Za-z0-9._-]*) fail "namespace '$1' contains invalid characters." ;;
     esac
 }
 
@@ -107,6 +125,31 @@ update_sources() {
         echo "  Pinned ${ns} -> ${sha}"
     done
     [ "${matched}" = true ] || fail "namespace '${target}' not found under sources in ${DEFAULTS_YAML}."
+}
+
+# apply_pins pins the namespaces listed in RESOURCE_TYPES_PINS (a JSON array of
+# {namespace, ref}, e.g. the resource-types-contrib dispatch payload) to their
+# resolved commit SHAs. Namespaces absent from defaults.yaml `sources` are
+# skipped, so an upstream-only namespace produces no change (Radius vendors only
+# what it registers). yq parses the JSON, so no extra tooling is required.
+apply_pins() {
+    local ns ref repo sha applied=0
+    while read -r ns ref; do
+        [ -n "${ns}" ] || continue
+        validate_namespace "${ns}"
+        validate_ref "${ref}"
+        repo="$(source_field "${ns}" repo)"
+        if [ -z "${repo}" ] || [ "${repo}" = "null" ]; then
+            echo "  Skipping ${ns}: not registered in ${DEFAULTS_YAML} sources"
+            continue
+        fi
+        echo "Resolving '${ref}' for ${ns} in ${repo}..."
+        sha="$(resolve_ref "${repo}" "${ref}")"
+        yq -i "(.sources[] | select(.namespace == \"${ns}\") | .ref) = \"${sha}\"" "${DEFAULTS_YAML}"
+        echo "  Pinned ${ns} -> ${sha}"
+        applied=$((applied + 1))
+    done < <(printf '%s' "${RESOURCE_TYPES_PINS}" | yq -p=json '.[] | .namespace + " " + .ref')
+    [ "${applied}" -gt 0 ] || echo "No registered namespaces in RESOURCE_TYPES_PINS; nothing re-pinned."
 }
 
 # fetch_ref <repo> <ref> <dir> shallow-fetches the ref into an empty dir.
@@ -207,7 +250,13 @@ main() {
     require_tools
     [ -f "${DEFAULTS_YAML}" ] || fail "defaults file not found: ${DEFAULTS_YAML}"
 
-    [ "${mode}" = update ] && update_sources
+    if [ "${mode}" = update ]; then
+        if [ -n "${RESOURCE_TYPES_PINS}" ]; then
+            apply_pins
+        else
+            update_sources
+        fi
+    fi
 
     echo "Syncing default resource types from resource-types-contrib..."
     copy_manifests
